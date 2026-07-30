@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "src",
+  "compilerOptions": {
+    "deleteOutDir": true,
+    "tsConfigPath": "tsconfig.build.json"
+  },
+  "comment:plugins": [
+    "@nestjs/swagger CLI 플러그인을 의도적으로 쓰지 않는다. 두 가지 이유가 있다.",
+    "1) 이 프로젝트 경로에 한글이 포함되어(...\\문서\\만날래) 플러그인이 컴파일 결과에",
+    "   `require(\"<절대 소스 경로>\")` 를 그대로 박아 넣어 런타임 MODULE_NOT_FOUND 가 난다.",
+    "2) 플러그인이 자동 생성하는 ApiResponse 는 응답 봉투를 모르기 때문에",
+    "   { success, data } 없이 DTO 만 문서화해 @ApiEnvelope 와 충돌한다.",
+    "→ 모든 DTO 필드에 @ApiProperty 를 명시적으로 붙인다 (프롬프트 §7 요구사항과도 일치)."
+  ]
+}

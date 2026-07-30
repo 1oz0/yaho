@@ -1,0 +1,28 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 환경변수 (.env.example 만 커밋한다)
+.env
+.env.local
+.env.*.local
+
+# SQLite 로컬 DB
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# use-db.ts 가 생성하는 파일 — 저작 원본은 schema.prisma 뿐이다
+prisma/schema.sqlite.prisma
+prisma/.active-schema
+
+# 에디터 / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 배포 산출물
+.railway/
