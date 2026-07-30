@@ -3,8 +3,24 @@
 과소비를 진단하고, 절약 챌린지로 아낀 돈을 **호남 여행으로 처방**하는 서비스의 백엔드.
 2026 호남 IS 해커톤 출품작.
 
+### 🌐 배포 (프론트는 여기에 붙이세요)
+
+| | |
+|---|---|
+| **API 베이스** | `https://yaho-production.up.railway.app/api/v1` |
+| **Swagger** | https://yaho-production.up.railway.app/docs |
+| **헬스체크** | https://yaho-production.up.railway.app/api/v1/health |
+
+Railway + PostgreSQL. `main` 에 푸시하면 자동 재배포되고, 데이터가 이미 있으면 재시드하지 않습니다
+(`seed:if-empty`) — 시연 중 재시작해도 진행 상황이 날아가지 않습니다.
+
+### 로컬
+
 - **Swagger** `http://localhost:3000/docs`
 - **API 베이스** `http://localhost:3000/api/v1`
+
+### 문서
+
 - **API 계약서** [`docs/api-contract.md`](docs/api-contract.md) — 프론트가 화면 순서대로 붙일 수 있게 정리
 - **설계 확정서** [`docs/design.md`](docs/design.md) — 스키마·ERD·의사결정 근거
 
