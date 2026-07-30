@@ -153,12 +153,19 @@ export class TransactionsService {
       }
     }
 
-    const ctx = await this.classification.buildContext(userId, allClassifiable, ownAccountKeys);
+    // AI 호출도 여기서 함께 끝난다. 실패해도 예외가 아니라 빈 판정으로 돌아와
+    // 규칙 엔진만으로 진행된다 — 동기화가 AI 때문에 실패하는 일은 없다.
+    const { context: ctx, ai } = await this.classification.buildContext(
+      userId,
+      allClassifiable,
+      ownAccountKeys,
+    );
 
     // --- 4) 저장 --------------------------------------------------------------
     let classified = 0;
     let needsReview = 0;
     let excluded = 0;
+    let aiClassified = 0;
 
     const rows = fresh.map((f, index) => {
       const classifiable = freshClassifiable[index];
@@ -167,6 +174,7 @@ export class TransactionsService {
       if (result.needsReview) needsReview += 1;
       else classified += 1;
       if (result.category === 'EXCLUDED') excluded += 1;
+      if (result.classifiedBy === 'AI') aiClassified += 1;
 
       return {
         userId,
@@ -201,7 +209,8 @@ export class TransactionsService {
     });
 
     this.logger.log(
-      `동기화 완료: 신규 ${rows.length}건 / 자동분류 ${classified}건 / 확인필요 ${needsReview}건`,
+      `동기화 완료: 신규 ${rows.length}건 / 자동분류 ${classified}건 ` +
+        `(그중 AI ${aiClassified}건) / 확인필요 ${needsReview}건`,
     );
 
     return {
@@ -211,6 +220,13 @@ export class TransactionsService {
       needsReview,
       recurringDetected: ctx.recurringMerchants.size,
       excluded,
+      aiClassified,
+      classificationSource: ai.usedAi ? 'AI' : 'RULE',
+      aiMerchantsAsked: ai.askedCount,
+      aiMerchantsAccepted: ai.acceptedCount,
+      aiMerchantsDeferred: ai.deferredCount,
+      aiFallbackReason: ai.fallbackReason,
+      aiLatencyMs: ai.latencyMs,
       periodFrom: toKstIso(from),
       periodTo: toKstIso(to),
       syncedAt: toKstIso(now),

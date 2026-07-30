@@ -4,10 +4,13 @@
  * ── 이 서비스가 지키는 계약 하나 ─────────────────────────────────────────────
  * **절대 throw 하지 않는다.** 성공이든 실패든 판별 가능한 결과 객체를 돌려준다.
  *
- * 이유: 야호에서 Claude 는 "있으면 더 좋은" 부가 기능이지 필수 경로가 아니다.
- * 여행코스 생성에만 쓰고, 분류·페르소나·예산 계산은 전부 규칙 기반이다(§11 평가기준 ③).
- * 그러니 API 가 죽어도 화면은 떠야 한다. 호출부가 try/catch 를 잊는 순간
- * 발표 화면이 500 을 뱉는 구조는 만들지 않는다.
+ * 이유: 야호에서 Claude 는 **주 경로이되 필수 경로는 아니다.**
+ * 거래 분류 · 페르소나 매칭 · 여행코스 생성 세 곳에 쓰지만, 셋 다 실패하면
+ * 규칙 기반 계산으로 자동 강등되어 화면은 그대로 뜬다(§11 평가기준 ③).
+ * 호출부가 try/catch 를 잊는 순간 발표 화면이 500 을 뱉는 구조는 만들지 않는다.
+ *
+ * 반대로 **금액 계산에는 절대 쓰지 않는다.** 예산·진척률·정산은 전부 산술이다.
+ * 모델이 더한 숫자는 검산할 방법이 없다.
  *
  * ── 왜 structured outputs 인가 ───────────────────────────────────────────────
  * 응답을 그대로 DB 에 넣어야 해서 JSON 스키마를 강제한다. 프롬프트로 "JSON 으로 답해" 라고
@@ -17,10 +20,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 
 import { AppConfigService } from '../config/app-config.service';
+import type { EnvVars } from '../config/env.validation';
 
 /** 호출이 실패한 이유. 그대로 DB 의 fallbackReason 에 남고 응답에도 실린다. */
 export type ClaudeFailureReason =
-  | 'DISABLED' // 키가 없거나 AI_COURSE_ENABLED=false
+  | 'DISABLED' // 키가 없거나 해당 기능의 AI 스위치가 꺼져 있다
   | 'TIMEOUT'
   | 'RATE_LIMITED'
   | 'OVERLOADED' // 529 — Anthropic 쪽 일시 과부하. 잠시 뒤 재시도하면 대개 된다.
@@ -47,6 +51,22 @@ export interface GenerateJsonParams {
   /** JSON Schema. `additionalProperties: false` 와 `required` 가 있어야 한다. */
   schema: Record<string, unknown>;
   maxTokens: number;
+  /**
+   * 이 호출만 다른 추론 강도를 쓴다. 생략하면 ANTHROPIC_EFFORT.
+   *
+   * 작업 성격이 다르기 때문에 필요하다. 여행코스 설계는 여러 후보를 견줘야 해서
+   * 생각할 시간이 필요하지만, 가맹점 분류는 "본죽이 뭐 파는 곳인가" 같은 지식 조회에 가까워
+   * 오래 생각한다고 정답률이 오르지 않는다 — 응답만 느려진다.
+   */
+  effort?: EnvVars['ANTHROPIC_EFFORT'];
+  /**
+   * 이 호출만 다른 타임아웃을 쓴다 (ms). 생략하면 ANTHROPIC_TIMEOUT_MS.
+   *
+   * 전역 기본값은 "발표 중 화면이 멈추면 안 된다"를 기준으로 짧게 잡혀 있다.
+   * 하지만 동기화처럼 로딩 화면이 이미 떠 있는 배치 작업은 조금 더 기다려도 되고,
+   * 여기서 타임아웃이 나면 오히려 재시도까지 겹쳐 전체가 더 느려진다.
+   */
+  timeoutMs?: number;
 }
 
 @Injectable()
@@ -56,9 +76,14 @@ export class ClaudeService {
 
   constructor(private readonly config: AppConfigService) {}
 
-  /** 호출 가능한 상태인가. 호출부가 "AI 배지를 띄울지" 판단할 때도 쓴다. */
+  /**
+   * 호출 가능한 상태인가 — **키가 있는가만 본다.**
+   *
+   * "이 기능에 AI 를 쓸 것인가"는 여기서 판단하지 않는다. 분류·페르소나·여행코스는
+   * 각자 독립된 스위치를 갖고, 호출부가 자기 플래그를 먼저 확인한 뒤 이 서비스를 부른다.
+   */
   get available(): boolean {
-    return this.config.aiCourseEnabled;
+    return this.config.anthropicConfigured;
   }
 
   get model(): string {
@@ -99,17 +124,23 @@ export class ClaudeService {
     // Date.now() 는 시스템 시각 변경에 흔들린다. 단조 시계인 performance.now() 가 맞다.
     const startedAt = performance.now();
 
+    const timeoutMs = params.timeoutMs ?? this.config.anthropicTimeoutMs;
+
     try {
-      const response = await this.getClient().messages.create({
-        model: this.config.anthropicModel,
-        max_tokens: params.maxTokens,
-        system: params.system,
-        output_config: {
-          effort: this.config.anthropicEffort,
-          format: { type: 'json_schema', schema: params.schema },
+      const response = await this.getClient().messages.create(
+        {
+          model: this.config.anthropicModel,
+          max_tokens: params.maxTokens,
+          system: params.system,
+          output_config: {
+            effort: params.effort ?? this.config.anthropicEffort,
+            format: { type: 'json_schema', schema: params.schema },
+          },
+          messages: [{ role: 'user', content: params.user }],
         },
-        messages: [{ role: 'user', content: params.user }],
-      });
+        // 클라이언트 기본 타임아웃을 이 호출에서만 덮어쓴다.
+        { timeout: timeoutMs },
+      );
 
       const latencyMs = Math.round(performance.now() - startedAt);
 
@@ -158,7 +189,7 @@ export class ClaudeService {
       };
     } catch (error) {
       const latencyMs = Math.round(performance.now() - startedAt);
-      const { reason, message } = this.classifyError(error);
+      const { reason, message } = this.classifyError(error, timeoutMs);
       // 스택 전체를 찍지 않는다 — 실패해도 폴백으로 이어지는 정상 경로라 로그를 어지럽힐 뿐이다.
       this.logger.warn(`Claude 호출 실패 (${latencyMs}ms, ${reason}): ${message}`);
       return { ok: false, reason, message };
@@ -166,9 +197,12 @@ export class ClaudeService {
   }
 
   /** SDK 의 타입 있는 예외로 분기한다. 메시지 문자열 매칭은 하지 않는다. */
-  private classifyError(error: unknown): { reason: ClaudeFailureReason; message: string } {
+  private classifyError(
+    error: unknown,
+    timeoutMs: number,
+  ): { reason: ClaudeFailureReason; message: string } {
     if (error instanceof Anthropic.APIConnectionTimeoutError) {
-      return { reason: 'TIMEOUT', message: `${this.config.anthropicTimeoutMs}ms 안에 응답이 없었습니다.` };
+      return { reason: 'TIMEOUT', message: `${timeoutMs}ms 안에 응답이 없었습니다.` };
     }
     if (error instanceof Anthropic.RateLimitError) {
       return { reason: 'RATE_LIMITED', message: '요청 한도를 초과했습니다.' };

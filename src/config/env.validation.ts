@@ -92,8 +92,8 @@ export class EnvVars {
   @IsNotEmpty()
   SWAGGER_PATH = 'docs';
 
-  // --- Claude API (AI 여행코스 생성) -----------------------------------------
-  // 빈 문자열을 허용한다. 키가 없으면 AI 코스가 시드 루트 폴백으로 내려갈 뿐,
+  // --- Claude API ------------------------------------------------------------
+  // 빈 문자열을 허용한다. 키가 없으면 AI 기능이 전부 규칙 기반 폴백으로 내려갈 뿐,
   // 서버는 정상 기동한다 — 발표 당일 네트워크가 죽어도 화면이 비지 않아야 한다.
   @IsString()
   ANTHROPIC_API_KEY = '';
@@ -111,10 +111,39 @@ export class EnvVars {
   @Max(300_000)
   ANTHROPIC_TIMEOUT_MS = 30_000;
 
-  /** false 면 키가 있어도 Claude 를 호출하지 않고 항상 폴백을 쓴다 (오프라인 리허설용). */
+  // --- 기능별 AI 스위치 -------------------------------------------------------
+  // 셋 다 독립이다. 하나를 꺼도 나머지는 그대로 Claude 를 쓴다.
+  // 전부 false 로 두면 API 키가 있어도 호출이 0회인 완전 오프라인 모드가 된다
+  // (발표 직전 리허설이나 네트워크가 불안한 현장에서 쓴다).
+
+  /** 여행코스를 Claude 로 생성한다. false 면 시드 루트 폴백. */
   @Transform(toBool)
   @IsBoolean()
   AI_COURSE_ENABLED = true;
+
+  /** 거래 카테고리를 Claude 로 분류한다. false 면 키워드 사전·MCC 규칙 엔진만 쓴다. */
+  @Transform(toBool)
+  @IsBoolean()
+  AI_CLASSIFY_ENABLED = true;
+
+  /** 페르소나 축을 Claude 가 고른다. false 면 최다 지출·최다 건수 규칙으로 고른다. */
+  @Transform(toBool)
+  @IsBoolean()
+  AI_PERSONA_ENABLED = true;
+
+  /**
+   * AI 분류 한 번에 보낼 가맹점 수.
+   *
+   * 배치는 동시에 던지므로 벽시계 시간은 **가장 느린 배치 하나**로 결정된다.
+   * 따라서 크게 묶을 이유가 없고, 오히려 한 배치가 커질수록 그 배치가 타임아웃 났을 때
+   * 잃는 가맹점이 많아진다. 20이면 거래 424건(가맹점 70여 곳)이 배치 4개로 갈라지고
+   * 각각 15초 안팎에 끝난다.
+   */
+  @Transform(toInt)
+  @IsInt()
+  @Min(5)
+  @Max(200)
+  AI_CLASSIFY_BATCH_SIZE = 20;
 }
 
 export function validateEnv(raw: Record<string, unknown>): EnvVars {

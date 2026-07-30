@@ -91,10 +91,32 @@ export class AppConfigService {
   }
 
   /**
-   * Claude 를 실제로 호출할 수 있는 상태인가.
-   * 키가 없거나 스위치가 꺼져 있으면 AI 코스는 시드 루트 폴백으로 내려간다.
+   * Claude 를 호출할 수 있는 최소 조건 — 키가 있는가.
+   *
+   * 기능별 스위치와 분리해 둔다. ClaudeService 는 이것만 보고,
+   * "이 기능에 AI 를 쓸 것인가"는 각 도메인 서비스가 자기 플래그로 판단한다.
+   * 한 기능을 끄려고 키를 지우면 나머지 기능까지 같이 죽기 때문이다.
    */
+  get anthropicConfigured(): boolean {
+    return this.anthropicApiKey.length > 0;
+  }
+
+  /** 여행코스를 Claude 로 생성한다. 꺼지면 시드 루트 폴백. */
   get aiCourseEnabled(): boolean {
-    return this.get('AI_COURSE_ENABLED') && this.anthropicApiKey.length > 0;
+    return this.get('AI_COURSE_ENABLED') && this.anthropicConfigured;
+  }
+
+  /** 거래 카테고리를 Claude 로 분류한다. 꺼지면 키워드 사전·MCC 규칙 엔진만 쓴다. */
+  get aiClassifyEnabled(): boolean {
+    return this.get('AI_CLASSIFY_ENABLED') && this.anthropicConfigured;
+  }
+
+  /** 페르소나 축을 Claude 가 고른다. 꺼지면 최다 지출·최다 건수 규칙으로 고른다. */
+  get aiPersonaEnabled(): boolean {
+    return this.get('AI_PERSONA_ENABLED') && this.anthropicConfigured;
+  }
+
+  get aiClassifyBatchSize(): number {
+    return this.get('AI_CLASSIFY_BATCH_SIZE');
   }
 }

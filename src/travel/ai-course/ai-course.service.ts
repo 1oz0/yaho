@@ -17,6 +17,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { ClaudeService } from '../../ai/claude.service';
 import { ClockService } from '../../common/clock/clock.service';
+import { AppConfigService } from '../../config/app-config.service';
 import type { TimeBand } from '../../common/constants/persona';
 import {
   PERSONA_CATEGORY_LABELS,
@@ -70,6 +71,7 @@ export class AiCourseService {
     private readonly clock: ClockService,
     private readonly persona: PersonaService,
     private readonly travel: TravelService,
+    private readonly config: AppConfigService,
   ) {}
 
   async generate(
@@ -283,7 +285,7 @@ export class AiCourseService {
       };
     };
 
-    if (!this.claude.available) return fallback('DISABLED');
+    if (!this.config.aiCourseEnabled) return fallback('DISABLED');
 
     const promptCandidates: CandidateStop[] = input.seedRoutes.flatMap((r) =>
       r.stops.map((s) => ({

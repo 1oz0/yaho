@@ -126,11 +126,11 @@ npm run start:dev
 | 0 | — | `POST /demo/reset` | 이전 리허설 흔적 제거 |
 | ① | 온보딩 | `POST /auth/login` | accessToken 발급 |
 | ② | 연동 | `GET /connections/institutions`<br>`POST /connections` × 4 | 기관 6곳, 150~400ms 지연으로 로딩 연출 |
-| ③ | 소비 분석 | `POST /transactions/sync` | **413건 수집, 자동분류 395건, 확인필요 18건** |
-| | | `GET /transactions/pending-review` | **18건 → 8개 질문으로 압축** |
-| | | `PATCH /transactions/{id}/category` | **1건 선택 → 4건 함께 정리** (`alsoUpdatedCount`) |
-| | | `GET /analysis/summary` | 월평균 840,507원, 카테고리 도넛, 정기결제 6종 |
-| ④ | 페르소나 | `POST /persona/evaluate` | **"혈당스파이크 취침형"** (또래 대비 1.45배) |
+| ③ | 소비 분석 | `POST /transactions/sync` | **424건 수집, 자동분류 405건**(AI 375 / 규칙 30), 확인필요 19건 · 약 14초 |
+| | | `GET /transactions/pending-review` | **19건 → 8개 질문으로 압축** |
+| | | `PATCH /transactions/{id}/category` | **1건 선택 → 여러 건 함께 정리** (`alsoUpdatedCount`) |
+| | | `GET /analysis/summary` | 월평균 959,507원, 카테고리 도넛, 정기결제 6종 |
+| ④ | 페르소나 | `POST /persona/evaluate` | **"혈당스파이크 취침형"** (또래 대비 1.48배) · Claude 가 축 선정 · 약 7초 |
 | ⑤ | 처방 선택 | `GET /challenges/plans` | **여행지 5곳 = 챌린지 카드.** 강진 2주 6만 · 고창 4주 20만 · 신안 8주 28만 |
 | ⑥ | 목표 배분 | `GET /saving-goals/suggestions?targetAmount=200000`<br>`POST /saving-goals`<br>`POST /challenges` | 자동 배분 → **합계가 목표액과 정확히 일치** → 시작 |
 | ⑦ | 진행 | `POST /demo/fast-forward` `{"days":14}` | 시계 점프 |
@@ -149,6 +149,15 @@ npm run start:dev
 > 시드 거래는 챌린지 시작 전날까지만 있어서, 아무것도 주입하지 않으면 "지출 0원 = 절약 만점"
 > 이 되어 진척률이 곧장 100% 로 갑니다(산술적으로는 맞습니다). 지출을 주입해야
 > "진행 중" 화면과 부분 블러가 자연스럽게 나옵니다.
+
+> **③ 동기화는 약 14초, ④ 페르소나는 약 7초 걸립니다.**
+> Claude 호출 시간입니다. 동기화는 가맹점 70여 곳을 배치 4개로 나눠 **동시에** 던지므로
+> 가장 느린 배치 하나만큼만 걸립니다.
+>
+> 발표에서 기다리기 부담스럽거나 네트워크가 불안하면 `.env` 에서
+> `AI_CLASSIFY_ENABLED=false` / `AI_PERSONA_ENABLED=false` 로 두세요.
+> 각각 1.1초 / 0.05초로 끝나고, **화면과 응답 형태는 완전히 같습니다.**
+> `classificationSource` 와 `ai.generatedBy` 만 `RULE` 이 됩니다.
 
 > **⑨ AI 코스는 15~20초 걸립니다.**
 > Claude API 왕복 시간입니다. 발표에서 정적으로 기다리기 부담스럽다면 ⑧ 직후에 미리 호출해
@@ -221,22 +230,39 @@ npm run db:seed
 | `422 NO_PERSONA` (AI 코스) | `POST /persona/evaluate` 를 먼저 호출했는지 |
 | AI 코스가 `FALLBACK` 으로만 나옴 | `meta.fallbackReason` 확인 → 아래 표 |
 | AI 코스가 15초 넘게 걸림 | 정상입니다. 미리 호출해 캐시를 채워 두거나 `ANTHROPIC_EFFORT=low` |
+| 동기화가 14초 넘게 걸림 | 정상입니다. 급하면 `AI_CLASSIFY_ENABLED=false` (1.1초, 화면 동일) |
+| 동기화 응답이 `classificationSource: "RULE"` | `aiFallbackReason` 확인 → 아래 표. 분류 자체는 정상 완료됐습니다 |
+| 페르소나에 `ai.reason` 이 null | `ai.fallbackReason` 확인. 페르소나 자체는 정상 산출됐습니다 |
 | 지도 마커가 비어 있음 | `missingCoordinateCount` 확인. 0이 아니면 `npm run db:seed` 재실행 |
 
-### AI 코스가 폴백으로 내려갈 때
+### AI 가 폴백으로 내려갈 때
 
-응답의 `meta.fallbackReason` 이 원인을 알려줍니다. **어느 경우든 화면은 정상적으로 그려집니다** —
-시드 루트를 재구성한 코스가 같은 형태로 내려가기 때문입니다.
+세 기능이 같은 실패 코드를 씁니다. 어디서 보는지만 다릅니다.
+
+| 기능 | 어디서 보는가 |
+|---|---|
+| 거래 분류 | `POST /transactions/sync` → `aiFallbackReason` |
+| 페르소나 | `POST /persona/evaluate` → `ai.fallbackReason` |
+| 여행코스 | `POST …/ai-course` → `meta.fallbackReason` |
+
+**어느 경우든 화면은 정상적으로 그려집니다** — 규칙 기반 결과가 같은 형태로 내려가기 때문입니다.
 
 | `fallbackReason` | 뜻 | 조치 |
 |---|---|---|
-| `DISABLED` | 키가 없거나 `AI_COURSE_ENABLED=false` | `.env` 의 `ANTHROPIC_API_KEY` 확인 |
+| `DISABLED` | 키가 없거나 해당 기능의 `AI_*_ENABLED=false` | `.env` 확인 |
 | `AUTH_FAILED` | 키가 유효하지 않음 | 키 재발급 |
 | `OVERLOADED` (529) | Anthropic 쪽 일시 과부하 | **잠시 뒤 다시 호출.** 폴백은 캐시되지 않아 자동 재시도됩니다 |
 | `RATE_LIMITED` (429) | 요청 한도 초과 | 잠시 대기 |
-| `TIMEOUT` | 제한 시간 초과 | `ANTHROPIC_TIMEOUT_MS` 상향 또는 `ANTHROPIC_EFFORT=low` |
-| `MAX_TOKENS` | 응답이 잘림 | 드묾. 재호출 |
-| `INVALID_COURSE` | 모델이 후보 밖 장소만 골라 검증 실패 | 드묾. 재호출 |
+| `TIMEOUT` | 제한 시간 초과 | `ANTHROPIC_TIMEOUT_MS` 상향, 또는 분류라면 `AI_CLASSIFY_BATCH_SIZE` 하향 |
+| `MAX_TOKENS` | 응답이 잘림 | 드묾. 분류라면 `AI_CLASSIFY_BATCH_SIZE` 하향 |
+| `BAD_JSON` | 응답이 JSON 이 아님 | 드묾. 재호출 |
+| `INVALID_COURSE` | 모델이 후보 밖 장소만 골라 검증 실패 (여행코스) | 드묾. 재호출 |
+| `BAD_TIME_BAND` / `BAD_CATEGORY` | 모델이 열거값 밖 축을 고름 (페르소나) | 드묾. 재호출 |
+| `NO_SPENDING` | 지출이 0이라 고를 근거가 없음 (페르소나) | `POST /transactions/sync` 를 먼저 |
+
+**분류는 배치 단위로 부분 실패할 수 있습니다.** 배치 4개 중 하나만 실패하면 나머지 3개의
+AI 판정은 그대로 쓰이고, 실패한 배치의 가맹점만 규칙 엔진으로 넘어갑니다.
+`aiMerchantsAccepted` 로 실제로 몇 곳이 AI 판정을 받았는지 확인할 수 있습니다.
 
 폴백 결과는 **캐시하지 않습니다.** 일시 장애 한 번에 시드 루트가 영구히 고정되는 것을 막기 위해,
 다음 호출에서 조용히 다시 시도합니다. AI 생성에 성공한 코스만 캐시됩니다.
@@ -261,12 +287,13 @@ src/
   auth/            JWT accessToken only, 데모 계정
   connections/     기관 연동 (복수 가능)
   financial/       FinancialProviderPort ← MockFinancialProvider
-  transactions/    sync + classification/(normalizer, rule-engine, recurring-detector)
+  transactions/    sync + classification/(normalizer, rule-engine, recurring-detector,
+                   ai-classifier — Claude 가맹점 판정)
   analysis/        summary-calculator
-  persona/         persona-calculator (48종)
+  persona/         persona-calculator (48종) + ai-persona (Claude 축 선정)
   saving-goals/
   challenges/      plan-calculator, progress-calculator
-  ai/              ClaudeService — Anthropic SDK 래퍼 (여행코스 생성 전용)
+  ai/              ClaudeService — Anthropic SDK 래퍼
   travel/          blur-policy, ai-course/(프롬프트·검증·일정계산), map/(마커·경계상자·구간거리)
   rewards/         뱃지·쿠폰 지급/조회
   demo/            발표 전용 (DEMO_MODE=true 일 때만)
@@ -282,8 +309,12 @@ scripts/
 (`*-calculator.ts`, `rule-engine.ts`, `blur-policy.ts`, `geo.ts`, `course-builder.ts`).
 전부 `now` 를 인자로 받으므로 가상 시계와 무관하게 테스트할 수 있습니다.
 
-**Claude API 를 타는 코드는 `src/ai/` 와 `src/travel/ai-course/` 뿐입니다.** 분류·페르소나·
-예산·진척 계산은 전부 규칙 기반이라 AI 없이도 동일하게 동작합니다.
+**Claude API 는 세 곳에서 씁니다** — 거래 분류(`transactions/classification/ai-classifier`),
+페르소나 축 선정(`persona/ai-persona`), 여행코스 생성(`travel/ai-course`).
+셋 다 실패하면 규칙 기반으로 자동 강등되므로 **키 없이도 전 화면이 그대로 동작합니다.**
+
+**금액이 오가는 계산은 AI 를 타지 않습니다.** 절약 목표 배분, 주차별 예산, 진척률,
+여행 경비 정산은 전부 산술입니다 — 모델이 더한 숫자는 검산할 방법이 없기 때문입니다.
 
 ---
 
@@ -307,9 +338,22 @@ scripts/
 
 ## 9. 설계 원칙
 
-**LLM 을 쓰지 않습니다.** 분류·페르소나·추천이 전부 결정론적 규칙입니다.
-전역 키워드 236개 + MCC 40개 + 정기결제 탐지 + 거래유형 가드로 413건 중 **395건(95.6%)을
-자동 분류**하고, 나머지는 사용자에게 물어봅니다. 유저가 늘어도 분류 비용은 0원입니다.
+**AI 는 주 경로이되 필수 경로가 아닙니다.** 거래 분류·페르소나 매칭·여행코스 생성 세 곳에서
+Claude 를 쓰지만, 셋 다 실패하면 규칙 기반으로 자동 강등되어 화면은 그대로 뜹니다.
+키를 지우고 서버를 띄워도 모든 API 가 200 을 돌려줍니다.
+
+| | AI 켬 | AI 끔 |
+|---|---|---|
+| 동기화 (거래 424건) | 13.9초 · AI 375건 / 규칙 30건 | 1.1초 · 규칙 405건 |
+| 페르소나 | 6.7초 · 개인화 문구 있음 | 0.05초 · 카탈로그 문구만 |
+| 자동 분류율 | 95.5% (405/424) | 95.5% (405/424) |
+| 응답 형태 | **완전히 동일** | **완전히 동일** |
+
+분류 정확도와 문구의 개인화 정도만 달라집니다. `AI_CLASSIFY_ENABLED` / `AI_PERSONA_ENABLED` /
+`AI_COURSE_ENABLED` 를 전부 `false` 로 두면 완전 오프라인 리허설이 됩니다.
+
+**금액 계산에는 AI 를 쓰지 않습니다.** 예산 배분, 진척률, 정산은 전부 산술이라
+같은 입력이면 언제나 같은 숫자가 나옵니다.
 
 **시드는 재현 가능합니다.** 고정 PRNG 를 쓰므로 같은 날 재시드하면 거래 전체가
 바이트 단위로 동일합니다 (SHA-256 으로 검증). 리허설과 본 발표의 숫자가 달라지지 않습니다.
@@ -386,9 +430,71 @@ scripts/
 
 ---
 
-## 12. AI 여행코스 (Claude API)
+## 12. Claude API 를 쓰는 세 곳
 
-페르소나에 맞춘 하루 코스를 Claude 가 짜 줍니다. **여기가 이 백엔드에서 유일하게 LLM 을 쓰는 곳입니다.**
+| 어디 | 무엇을 맡겼는가 | 실패하면 | 소요 |
+|---|---|---|---|
+| **거래 분류** | 가맹점이 12종 중 어디에 속하는가 | 키워드 사전·MCC 규칙 엔진 | 약 14초 |
+| **페르소나** | 시간대·카테고리 두 축 + 개인화 문구 | 각 축의 1위를 그대로 | 약 7초 |
+| **여행코스** | 경유지 선택·순서·문구 | 시드 루트 재구성 | 약 20초 |
+
+**금액이 오가는 계산은 어디에도 맡기지 않았습니다.** 예산 배분, 진척률, 여행 경비 정산은
+전부 산술입니다 — 모델이 더한 숫자는 검산할 방법이 없고, 화면에 뜬 합계가 어긋나면
+그것대로 서비스가 무너집니다.
+
+### 12-1. 거래 분류
+
+**거래 424건이 아니라 정규화 가맹점 70여 곳을 묻습니다.** 배치 4개로 나눠 동시에 던지므로
+가장 느린 배치 하나만큼만 걸립니다.
+
+건별로 묻지 않는 이유는 비용만이 아닙니다. 같은 가맹점이 달마다 다른 카테고리로 갈라지면
+카테고리별 월평균이 흔들리고, 그 위에 얹힌 **절약 목표 슬라이더 상한과 챌린지 진척률까지**
+같이 흔들립니다. 가맹점 단위로 한 번만 판정하면 그런 일이 없습니다.
+
+분류 파이프라인에서 AI 는 **3순위**입니다.
+
+```
+0. 거래유형 가드   TRANSFER_IN / CANCEL / 취소 상계   ← 판단이 아니라 사실
+1. 정규화
+2. 사용자 개인 규칙                                  ← 사람이 고친 것이 위
+3. ★ AI 판정      Claude 가맹점 판정
+4. 전역 키워드 사전 (329개)
+5. MCC 매핑 (54개)
+6. 정기결제 탐지
+7. 계좌 간 이체
+8. 미분류 → 사용자에게 질문
+```
+
+0순위와 2순위가 AI 보다 앞서는 이유가 있습니다. 거래유형은 판단할 게 없는 **사실**이라
+월급 입금을 모델에게 물으면 지출로 만들 위험만 생기고, 사용자 규칙을 AI 가 이기면
+"화면에서 고쳤는데 다음 동기화에 원복됐다"가 됩니다.
+
+**모델이 확신하지 못하면 물러섭니다.** `confidence: LOW` 이거나 `UNCLASSIFIED` 로 답한
+가맹점은 채택하지 않고 규칙 엔진으로 넘깁니다. 억지 추측보다 "모르겠다"가 낫고,
+사용자에게 직접 물어보는 화면이 이미 있기 때문입니다. `aiMerchantsDeferred` 로 몇 곳이
+그랬는지 볼 수 있습니다.
+
+### 12-2. 페르소나
+
+**모델은 두 축만 고릅니다. 페르소나 이름은 짓지 않습니다.**
+축 조합을 코드(`{시간대}_{카테고리}`)로 바꿔 `Persona` 카탈로그 48행에서 이름·태그라인·설명을
+꺼내는 것은 서버입니다. 그래서 존재하지 않는 페르소나가 나올 수 없고, 기획이 문구를 바꿔도
+코드를 안 고쳐도 되며, 같은 사람이 두 번 조회했을 때 이름이 달라지지 않습니다.
+
+그럼 AI 는 왜 쓰는가 — 규칙은 "월평균 최다 카테고리 × 승인 건수 최다 시간대"라 1위와 2위가
+근소해도 무조건 1위를 집습니다. 실제 데모 데이터에서 이런 판단이 나왔습니다.
+
+> 규칙: `EVENING_SHOPPING` (쇼핑이 금액 25.0%로 1위)
+> AI:  `EVENING_DELIVERY_FOOD`
+> 근거: *"쇼핑이 25.0%로 금액 1위지만 29건에 그치고, 배달음식은 18.9%에 47건으로 반복 빈도가
+> 훨씬 높습니다. 교촌치킨 7건·마라공방 8건에 저녁 결제가 125건(36.9%)으로 가장 많습니다."*
+
+금액 1위가 아니라 **습관**을 집은 것입니다. 갈렸을 때는 `ai.divergedFromRule: true` 와
+`ai.ruleBaselineCode` 로 양쪽을 다 보여줍니다.
+
+소비량 축(또래 대비 배수)과 모든 금액은 **어느 경로로 가든 산술**입니다.
+
+### 12-3. 여행코스
 
 ```
 POST /api/v1/travel/destinations/{destinationId}/ai-course        생성 (캐시 우선)
@@ -396,7 +502,7 @@ POST /api/v1/travel/destinations/{destinationId}/ai-course?refresh=true   강제
 GET  /api/v1/travel/destinations/{destinationId}/ai-course        조회만 (생성 안 함)
 ```
 
-### 무엇을 AI 에게 맡겼는가
+#### 무엇을 AI 에게 맡겼는가
 
 | 항목 | 담당 | 이유 |
 |---|---|---|
@@ -404,19 +510,17 @@ GET  /api/v1/travel/destinations/{destinationId}/ai-course        조회만 (생
 | 제목 · 요약 · 추천 이유 · 경유지 설명 · 팁 | **Claude** | 문장 생성 |
 | 금액, 체류 시간, 도착 시각, 총합 | **서버** | 합계가 어긋나면 안 되고, 두 번 열었을 때 숫자가 달라지면 안 됨 |
 | 좌표 | **서버** | 시드 데이터가 유일한 출처 |
-| 페르소나 산출, 예산 확정 | **서버 (규칙 기반)** | 평가기준 ③ — 핵심 계산은 AI 없이 결정론적 |
+| 예산 확정 (아낀 돈) | **서버 (산술)** | 챌린지 목표 → 절약 목표 → 0 순서 |
 
 경유지는 **해당 여행지에 등록된 시드 경유지 중에서만** 고르게 하고, 목록에 없는 장소가 오면
 서버가 걸러냅니다(`course-builder.ts`). 존재하지 않는 식당을 추천하면 좌표를 붙일 수 없어
 지도에 못 찍고, 무엇보다 사용자가 헛걸음하기 때문입니다.
 
-### 선행 조건
+#### 선행 조건
 
 `POST /persona/evaluate` 로 페르소나가 산출돼 있어야 합니다(없으면 `422 NO_PERSONA`).
-페르소나는 카드내역 분석에서 **지출 비중 최다 카테고리 × 승인 건수 최다 시간대**로 정해지며,
-이 계산은 AI 를 타지 않습니다.
 
-### 캐시 정책
+#### 캐시 정책
 
 | 상황 | 동작 |
 |---|---|
@@ -429,18 +533,34 @@ GET  /api/v1/travel/destinations/{destinationId}/ai-course        조회만 (생
 폴백을 캐시하지 않는 이유: Anthropic 쪽 일시적 529 한 번에 시드 루트가 영구히 박제되면
 그 사용자는 그 여행지에서 두 번 다시 AI 코스를 못 봅니다.
 
-### 환경변수
+### 12-4. 환경변수
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | (빈 값) | 비어 있으면 항상 폴백. 서버는 정상 기동 |
+| `ANTHROPIC_API_KEY` | (빈 값) | 비어 있으면 세 기능 전부 규칙 기반. 서버는 정상 기동 |
 | `ANTHROPIC_MODEL` | `claude-opus-5` | |
-| `ANTHROPIC_EFFORT` | `medium` | 느리면 `low` 로 |
-| `ANTHROPIC_TIMEOUT_MS` | `30000` | SDK 가 1회 재시도하므로 최악 약 2배 |
-| `AI_COURSE_ENABLED` | `true` | `false` 면 호출 없이 즉시 폴백 (오프라인 리허설용) |
+| `ANTHROPIC_EFFORT` | `medium` | 페르소나·여행코스에 적용. 분류는 코드가 `low` 를 따로 씀 |
+| `ANTHROPIC_TIMEOUT_MS` | `30000` | 페르소나·여행코스에 적용. 분류는 90초를 따로 씀 |
+| `AI_COURSE_ENABLED` | `true` | 여행코스 |
+| `AI_CLASSIFY_ENABLED` | `true` | 거래 분류 |
+| `AI_PERSONA_ENABLED` | `true` | 페르소나 |
+| `AI_CLASSIFY_BATCH_SIZE` | `20` | 한 번에 보낼 가맹점 수 |
+
+세 스위치는 독립입니다. 전부 `false` 로 두면 키가 있어도 **호출이 0회**인 완전 오프라인
+모드가 됩니다 — 발표 직전 리허설이나 네트워크가 불안한 현장에서 쓰세요.
+
+> **분류만 effort·timeout 을 따로 쓰는 이유**
+> 분류는 "본죽이 뭐 파는 곳인가" 같은 지식 조회에 가까워 오래 생각한다고 정답률이 오르지
+> 않습니다(→ `low`). 반면 이미 로딩 화면이 떠 있는 배치 작업이라 조금 더 기다려도 되고,
+> 여기서 타임아웃이 나면 SDK 재시도까지 겹쳐 전체가 두 배로 느려집니다(→ 90초).
+> 여행코스·페르소나는 후보를 견주는 판단이라 반대로 `medium` · 30초입니다.
 
 > **키 관리**: `.env` 는 `.gitignore` 에 있어 커밋되지 않습니다. `.env.example` 에는
 > 절대 실제 키를 넣지 마세요.
+
+> **API 사용량**: 동기화 1회 = 호출 4번, 페르소나 1회 = 1번, 여행코스 1회 = 1번입니다.
+> `POST /demo/reset` 후 다시 동기화하면 또 호출되므로, 리허설을 여러 번 돌릴 계획이면
+> `AI_CLASSIFY_ENABLED=false` 로 두고 본 발표에서만 켜는 편이 낫습니다.
 
 ---
 

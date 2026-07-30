@@ -28,6 +28,8 @@ const GLOBAL_RULES: GlobalRule[] = sortGlobalRules([
 function makeCtx(overrides: Partial<ClassificationContext> = {}): ClassificationContext {
   return {
     userRules: new Map<string, TxCategory>(),
+    // 기본은 빈 Map — AI 를 안 쓰는 상태. 예전 동작이 그대로 유지되는지 확인하는 기준선이다.
+    aiCategories: new Map<string, TxCategory>(),
     globalRules: GLOBAL_RULES,
     mccRules: new Map([
       ['5812', { id: 'm-5812', mcc: '5812', category: 'DINING_OUT' as TxCategory }],
@@ -112,7 +114,69 @@ describe('2순위 — 사용자 개인 규칙이 전역 사전을 이긴다', ()
   });
 });
 
-describe('3순위 — 전역 키워드 사전 우선순위', () => {
+describe('3순위 — AI 판정', () => {
+  it('AI 가 전역 키워드 사전을 이긴다', () => {
+    // 사전은 "치킨"(95)으로 DINING_OUT 이라 말하지만, AI 가 배달로 봤다면 AI 가 이긴다
+    const ctx = makeCtx({
+      aiCategories: new Map([['교촌치킨', 'DELIVERY_FOOD' as TxCategory]]),
+    });
+    const r = classify(makeTx({ merchantName: '교촌치킨 광주상무점' }), ctx);
+    expect(r.category).toBe('DELIVERY_FOOD');
+    expect(r.classifiedBy).toBe('AI');
+    expect(r.matchedRuleId).toBeNull();
+  });
+
+  it('사용자 규칙은 AI 를 이긴다 — 사람이 고친 것을 모델이 되돌리면 안 된다', () => {
+    const ctx = makeCtx({
+      userRules: new Map([['스타벅스', 'HEALTH_FITNESS' as TxCategory]]),
+      aiCategories: new Map([['스타벅스', 'CAFE_SNACK' as TxCategory]]),
+    });
+    const r = classify(makeTx({ merchantName: '스타벅스 광주상무점' }), ctx);
+    expect(r.category).toBe('HEALTH_FITNESS');
+    expect(r.classifiedBy).toBe('USER_RULE');
+  });
+
+  it('거래유형 가드는 AI 보다 앞선다 — 월급 입금을 지출로 만들 수 없다', () => {
+    const ctx = makeCtx({
+      aiCategories: new Map([['(주)야호컴퍼니', 'SHOPPING' as TxCategory]]),
+    });
+    const r = classify(
+      makeTx({ merchantName: '(주)야호컴퍼니', txType: 'TRANSFER_IN' }),
+      ctx,
+    );
+    expect(r.category).toBe('EXCLUDED');
+    expect(r.classifiedBy).toBe('TX_TYPE_GUARD');
+  });
+
+  it('AI 판정에 없는 가맹점은 규칙 엔진으로 내려간다', () => {
+    const ctx = makeCtx({
+      aiCategories: new Map([['어딘가다른곳', 'SHOPPING' as TxCategory]]),
+    });
+    const r = classify(makeTx({ merchantName: '스타벅스 광주상무점' }), ctx);
+    expect(r.category).toBe('CAFE_SNACK');
+    expect(r.classifiedBy).toBe('GLOBAL_RULE');
+  });
+
+  it('AI 판정이 비어 있으면 예전과 완전히 같게 동작한다', () => {
+    const tx = makeTx({ merchantName: '배민)교촌치킨 광주상무점' });
+    const withEmptyAi = classify(tx, makeCtx({ aiCategories: new Map() }));
+    const baseline = classify(tx, makeCtx());
+    expect(withEmptyAi).toEqual(baseline);
+    expect(withEmptyAi.classifiedBy).toBe('GLOBAL_RULE');
+  });
+
+  it('AI 판정도 정기결제 플래그는 규칙 계산 결과를 따른다', () => {
+    const ctx = makeCtx({
+      aiCategories: new Map([['멜론', 'SUBSCRIPTION_OTT' as TxCategory]]),
+      recurringMerchants: new Set(['멜론']),
+    });
+    const r = classify(makeTx({ merchantName: '멜론' }), ctx);
+    expect(r.classifiedBy).toBe('AI');
+    expect(r.isRecurring).toBe(true); // 주기 판정은 AI 가 아니라 산술이 한다
+  });
+});
+
+describe('4순위 — 전역 키워드 사전 우선순위', () => {
   it('배달 채널이 가맹점 브랜드보다 먼저 걸린다', () => {
     // "배민)교촌치킨" — 교촌치킨(45)이 아니라 배민(10)이 이겨야 배달로 잡힌다
     const r = classify(makeTx({ merchantName: '배민)교촌치킨 광주상무점' }), makeCtx());
@@ -167,7 +231,7 @@ describe('sortGlobalRules', () => {
   });
 });
 
-describe('4순위 — MCC 매핑', () => {
+describe('5순위 — MCC 매핑', () => {
   it('키워드 사전이 놓치면 MCC 로 건진다', () => {
     const r = classify(makeTx({ merchantName: '처음보는식당이름', mcc: '5812' }), makeCtx());
     expect(r.category).toBe('DINING_OUT');
@@ -188,7 +252,7 @@ describe('4순위 — MCC 매핑', () => {
   });
 });
 
-describe('5순위 — 정기결제', () => {
+describe('6순위 — 정기결제', () => {
   it('이름도 업종코드도 모르지만 매월 빠져나가면 구독으로 본다', () => {
     // 통신·보험은 이름으로 잡히므로(FIXED_BILLS 규칙), 여기까지 내려온 정기결제는
     // 정체 모를 구독일 가능성이 높다. 게다가 구독은 줄일 수 있어 절약 목표에 잡히는 편이 낫다.
@@ -207,7 +271,7 @@ describe('5순위 — 정기결제', () => {
   });
 });
 
-describe('6순위 — 본인 명의 계좌 간 이체', () => {
+describe('7순위 — 본인 명의 계좌 간 이체', () => {
   it('내 계좌로 옮긴 돈은 지출이 아니다', () => {
     const ctx = makeCtx({ ownAccountKeys: new Set(['acc-toss-123']) });
     const r = classify(
@@ -240,7 +304,7 @@ describe('6순위 — 본인 명의 계좌 간 이체', () => {
   });
 });
 
-describe('7순위 — 미분류 판정', () => {
+describe('8순위 — 미분류 판정', () => {
   it.each(['카카오페이', '토스페이', '네이버페이', '(주)케이지이니시스', '이체 박**'])(
     '%s → UNCLASSIFIED + needsReview',
     (merchantName) => {
@@ -257,7 +321,7 @@ describe('7순위 — 미분류 판정', () => {
   });
 });
 
-describe('결정론성 — LLM 없이 같은 입력이면 같은 출력', () => {
+describe('결정론성 — 같은 컨텍스트면 같은 출력', () => {
   it('100회 반복해도 결과가 동일하다', () => {
     const tx = makeTx({ merchantName: '배민)한식대첩 광주상무점', mcc: '5812' });
     const ctx = makeCtx();

@@ -325,6 +325,20 @@ model UserPersona {
   fallbackApplied       Boolean  @default(false) // 최다 카테고리가 축에 없어 대체했는가
   actualTopCategory     String? // 대체했다면 원래 1위였던 카테고리
 
+  // --- AI 축 선정 (§추가요청 2) ---
+  /// CLAUDE | RULE — 두 축을 누가 골랐는가. RULE 이어도 페르소나는 정상 성립한다.
+  generatedBy    String  @default("RULE")
+  /// 모델이 쓴 축 선정 근거. 화면의 "왜 이 페르소나인가"에 그대로 나간다.
+  aiReason       String?
+  /// 모델이 쓴 개인화 한 줄. 카탈로그 tagline 위에 덧붙여 보여준다.
+  aiHeadline     String?
+  /// AI 를 못 썼다면 그 이유 (DISABLED / TIMEOUT / BAD_CATEGORY / …)
+  fallbackReason String?
+  /// AI 가 규칙과 다른 축을 골랐는가. 심사에서 "AI 가 실제로 일하는가"를 보여주는 근거.
+  aiDivergedFromRule Boolean @default(false)
+  /// 규칙 기반으로 계산했다면 나왔을 코드. 비교용 스냅샷.
+  ruleBaselineCode String?
+
   isCurrent             Boolean  @default(true)
   evaluatedAt           DateTime @default(now())
 

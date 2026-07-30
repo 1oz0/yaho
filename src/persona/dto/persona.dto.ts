@@ -14,7 +14,9 @@ export class PersonaAxesDto {
   @ApiProperty({
     type: String,
     enum: PERSONA_CATEGORIES,
-    description: '월평균 지출 최다 카테고리 (12종)',
+    description:
+      '이 사람을 규정하는 소비 카테고리 (12종). 기본은 월평균 지출 1위이고, ' +
+      'AI 가 1·2위가 근소하다고 판단하면 다른 쪽을 고를 수 있습니다 (`ai.divergedFromRule`).',
   })
   category!: string;
 
@@ -66,9 +68,73 @@ export class PersonaEvidenceDto {
   @ApiProperty({
     type: String,
     nullable: true,
-    description: '예비 필드. 현재는 항상 null.',
+    description:
+      'AI 가 규칙과 **다른** 카테고리를 골랐을 때, 규칙이 1위로 뽑았던 카테고리. ' +
+      '같으면 null. "규칙은 외식이라 했지만 AI 는 배달로 봤다"를 화면에 보여주고 싶을 때 씁니다.',
   })
   actualTopCategory!: string | null;
+}
+
+/**
+ * 페르소나를 누가 어떻게 골랐는지.
+ *
+ * **`generatedBy` 가 `RULE` 이어도 정상 응답입니다.** 페르소나는 항상 나오고,
+ * 달라지는 것은 `reason` / `headline` 개인화 문구가 있느냐뿐입니다.
+ * 프론트는 분기하지 말고 `reason` 이 null 이면 그 영역만 숨기면 됩니다.
+ */
+export class PersonaAiDto {
+  @ApiProperty({
+    type: String,
+    enum: ['CLAUDE', 'RULE'],
+    description:
+      '두 축을 누가 골랐는가. `CLAUDE` 면 모델이 비중 분포를 보고 판단했고, ' +
+      '`RULE` 이면 각 축의 1위를 그대로 집은 것입니다.',
+  })
+  generatedBy!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      '모델이 쓴 축 선정 근거 (한국어 두세 문장, 숫자 포함). 화면의 "왜 이 페르소나인가"에 ' +
+      '그대로 띄우면 됩니다. `RULE` 이면 null.',
+    example: '배달음식이 18.9%로 가장 높고, 저녁 시간대 결제가 전체의 41%입니다.',
+  })
+  reason!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      '모델이 쓴 개인화 한 줄 (40자 이내). 카탈로그 `tagline` 은 페르소나 48종 공통 문구이고, ' +
+      '이건 **이 사용자 전용**입니다. 있으면 tagline 대신 띄우는 걸 권합니다. `RULE` 이면 null.',
+    example: '퇴근길에 하루를 보상하는 소비',
+  })
+  headline!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'AI 를 못 쓴 이유. `DISABLED`(키 없음/스위치 off) · `NO_SPENDING`(지출 0) · `TIMEOUT` · ' +
+      '`RATE_LIMITED` · `OVERLOADED` · `BAD_CATEGORY` 등. 성공했으면 null.',
+  })
+  fallbackReason!: string | null;
+
+  @ApiProperty({
+    type: Boolean,
+    description:
+      'AI 가 규칙과 다른 축을 골랐는가. 1위와 2위가 근소할 때 주로 true 가 됩니다.',
+  })
+  divergedFromRule!: boolean;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: '규칙 기반으로만 계산했다면 나왔을 페르소나 코드. 비교용 스냅샷.',
+    example: 'EVENING_DINING_OUT',
+  })
+  ruleBaselineCode!: string | null;
 }
 
 export class PersonaDto {
@@ -89,6 +155,9 @@ export class PersonaDto {
 
   @ApiProperty({ type: PersonaAxesDto })
   axes!: PersonaAxesDto;
+
+  @ApiProperty({ type: PersonaAiDto })
+  ai!: PersonaAiDto;
 
   @ApiProperty({ type: PersonaEvidenceDto })
   evidence!: PersonaEvidenceDto;

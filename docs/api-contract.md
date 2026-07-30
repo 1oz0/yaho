@@ -178,6 +178,8 @@ HEALTH_FITNESS 의료+건강+피트니스  EDUCATION 교육          TRAVEL_STAY
 
 최근 6개월 거래를 수집하고 분류 파이프라인을 돌립니다. **재호출해도 안전합니다** (중복은 `skipped`).
 
+**약 14초 걸립니다** — Claude 가 가맹점을 분류하는 시간입니다. 로딩 화면을 띄워 주세요.
+
 ```json
 // 요청 (선택)
 { "months": 6 }
@@ -185,16 +187,39 @@ HEALTH_FITNESS 의료+건강+피트니스  EDUCATION 교육          TRAVEL_STAY
 ```json
 // 201
 { "success": true, "data": {
-  "imported": 421, "skipped": 0,
-  "classified": 402,        // 자동 분류 성공
+  "imported": 424, "skipped": 0,
+  "classified": 405,        // 자동 분류 성공
   "needsReview": 19,        // ← 화면 ③ "확신 못한 N건" 의 N
   "recurringDetected": 6,   // 정기결제 가맹점 수
   "excluded": 20,           // 월급·계좌간이체·취소
+
+  // --- AI 분류 결과 ---
+  "aiClassified": 375,           // classified 중 Claude 가 판정한 거래 수
+  "classificationSource": "AI",  // "AI" | "RULE"
+  "aiMerchantsAsked": 72,        // 물어본 가맹점 수 (거래 수가 아님)
+  "aiMerchantsAccepted": 60,     // 모델이 확신해서 채택
+  "aiMerchantsDeferred": 12,     // 모델이 "모르겠다" → 규칙 엔진으로
+  "aiFallbackReason": null,      // 실패했다면 사유
+  "aiLatencyMs": 12470,
+
   "periodFrom": "2026-01-01T00:00:00.000+09:00",
   "periodTo":   "2026-07-30T16:49:47.714+09:00",
   "syncedAt":   "2026-07-30T16:49:47.714+09:00"
 }}
 ```
+
+**분류는 거래가 아니라 가맹점 단위입니다.** 거래 424건이 아니라 정규화 가맹점 72곳을
+20곳씩 묶어 4번 호출합니다. 같은 가맹점이 달마다 다른 카테고리로 갈라지지 않게 하기 위함입니다 —
+갈라지면 카테고리별 월평균이 흔들리고, 그 위에 얹힌 절약 슬라이더 상한과 진척률까지 흔들립니다.
+
+**`classificationSource: "RULE"` 이어도 정상 응답입니다.** 키가 없거나 호출이 실패하면
+키워드 사전·MCC 규칙 엔진만으로 분류하고 `aiFallbackReason` 에 사유를 담습니다.
+자동 분류 건수는 거의 같고(405건), 응답 형태는 완전히 동일합니다. 프론트는 분기할 필요 없이
+`classificationSource` 로 배지만 다르게 붙이면 됩니다.
+
+**배치 단위 부분 실패가 가능합니다.** 4개 중 하나만 실패하면 나머지 3개의 AI 판정은 그대로
+쓰이고 실패한 배치의 가맹점만 규칙 엔진으로 넘어갑니다. 이때 `classificationSource` 는 `AI`,
+`aiFallbackReason` 은 채워진 상태가 됩니다.
 
 #### `GET /transactions` 🔒
 
@@ -219,7 +244,22 @@ HEALTH_FITNESS 의료+건강+피트니스  EDUCATION 교육          TRAVEL_STAY
 }
 ```
 
-`classifiedBy` 값: `TX_TYPE_GUARD` · `USER_RULE` · `GLOBAL_RULE` · `MCC` · `RECURRING` · `INTERNAL_TRANSFER` · `NONE` · `MANUAL`
+`classifiedBy` 값 — 파이프라인에서 **어느 단계가 이 카테고리를 정했는지**입니다. 우선순위 순:
+
+| 값 | 뜻 | 화면 라벨 예시 |
+|---|---|---|
+| `TX_TYPE_GUARD` | 거래유형(수입·취소)만으로 확정 | 거래유형 |
+| `USER_RULE` | 사용자가 이전에 지정한 규칙 | 내가 정한 규칙 |
+| `AI` | **Claude 가맹점 판정** | AI 분류 |
+| `GLOBAL_RULE` | 전역 키워드 사전 (329개) | 가맹점 사전 |
+| `MCC` | 업종코드 매핑 (54개) | 업종코드 |
+| `RECURRING` | 정기결제 주기 탐지 | 정기결제 탐지 |
+| `INTERNAL_TRANSFER` | 본인 명의 계좌 간 이체 | 계좌 간 이체 |
+| `NONE` | 미분류 (사용자 확인 대기) | 미분류 |
+| `MANUAL` | 사용자가 직접 지정 | 직접 지정 |
+
+`USER_RULE` 과 `TX_TYPE_GUARD` 가 `AI` 보다 앞섭니다 — 사용자가 화면에서 고친 카테고리를
+모델이 되돌리면 안 되고, 월급 입금은 판단이 아니라 사실이기 때문입니다.
 
 #### `GET /transactions/pending-review` 🔒 — **핵심 화면**
 
@@ -326,7 +366,8 @@ HEALTH_FITNESS 의료+건강+피트니스  EDUCATION 교육          TRAVEL_STAY
 
 #### `POST /persona/evaluate` 🔒 · `GET /persona/me` 🔒
 
-**48종** 중 하나를 결정합니다 (시간대 4 × 카테고리 12). **AI 를 쓰지 않습니다.**
+**Claude 가 두 축(시간대 × 카테고리)을 고르고, 서버가 48종 카탈로그에서 페르소나를 확정합니다.**
+약 7초 걸립니다.
 
 ```json
 { "success": true, "data": {
@@ -339,6 +380,14 @@ HEALTH_FITNESS 의료+건강+피트니스  EDUCATION 교육          TRAVEL_STAY
     "timeBand": "EVENING",
     "category": "DELIVERY_FOOD",
     "spendingLevel": "OVER"      // ← 코드에는 안 들어감. 과소비 진단 근거
+  },
+  "ai": {
+    "generatedBy": "CLAUDE",     // "CLAUDE" | "RULE"
+    "headline": "저녁마다 익숙한 메뉴를 부르는 소비",
+    "reason": "쇼핑이 25.0%로 금액 1위지만 29건에 그치고, 배달음식은 18.9%에 47건으로 반복 빈도가 훨씬 높습니다. 교촌치킨 7건·마라공방 8건에 저녁 결제가 125건(36.9%)으로 가장 많습니다.",
+    "fallbackReason": null,
+    "divergedFromRule": true,           // 규칙과 다른 축을 골랐다
+    "ruleBaselineCode": "EVENING_SHOPPING"  // 규칙만 썼다면 나왔을 코드
   },
   "evidence": {
     "topCategoryAmount": 175833, "topCategoryLabel": "배달음식",
@@ -354,11 +403,38 @@ HEALTH_FITNESS 의료+건강+피트니스  EDUCATION 교육          TRAVEL_STAY
 }}
 ```
 
-- **시간대 축** `NIGHT` 22~05 / `MORNING` 05~11 / `LUNCH` 11~17 / `EVENING` 17~22 (승인 건수 최다)
+- **시간대 축** `NIGHT` 22~05 / `MORNING` 05~11 / `LUNCH` 11~17 / `EVENING` 17~22 (승인 **건수** 기준)
 - **카테고리 축** 위 12종 (§1-2-1)
 - **`spendingLevel`** `LOW` < 80% / `NORMAL` 80~120% / `OVER` > 120% — **페르소나 코드에는 포함되지 않습니다.**
 - `evidence` 를 화면에 그대로 띄우면 "왜 이 페르소나인지" 설명이 됩니다.
-- `POST` 와 `GET` 의 `evidence` 는 **항상 동일**합니다 (산출 시점 스냅샷).
+- `POST` 와 `GET` 의 `evidence` · `ai` 는 **항상 동일**합니다 (산출 시점 스냅샷).
+
+#### AI 가 무엇을 하고 무엇을 안 하는가
+
+| 항목 | 담당 |
+|---|---|
+| 두 축을 무엇으로 볼지 | Claude |
+| `ai.reason` · `ai.headline` | Claude |
+| `displayName` · `tagline` · `description` | **서버 (Persona 카탈로그 48행)** |
+| `spendingLevel` · `spendingRatio` · 모든 금액 | **서버 (산술)** |
+
+**모델은 페르소나 이름을 짓지 않습니다.** 축 두 개만 고르고 코드 조합·카탈로그 조회는
+서버가 하므로 48종 밖의 페르소나는 나올 수 없습니다.
+
+#### 화면에 어떻게 쓰나
+
+- `ai.headline` 이 있으면 **`tagline` 대신** 띄우세요. `tagline` 은 페르소나 48종 공통 문구이고
+  `headline` 은 이 사용자 전용입니다.
+- `ai.reason` 은 "왜 이 페르소나인가" 영역에 그대로 넣으면 됩니다. 숫자가 포함돼 있습니다.
+- `ai.divergedFromRule: true` 면 규칙과 AI 가 갈린 경우입니다. `ruleBaselineCode` 와 함께
+  "단순 1위는 쇼핑이지만 AI 는 배달로 봤습니다" 같은 설명을 붙일 수 있습니다.
+
+#### `generatedBy: "RULE"` 이어도 정상입니다
+
+키가 없거나 호출이 실패하면 각 축의 1위를 그대로 집어 페르소나를 산출하고
+`ai.fallbackReason` 에 사유를 담습니다. **페르소나는 항상 나옵니다.**
+`ai.reason` / `ai.headline` 이 `null` 이 될 뿐이니, 프론트는 분기하지 말고
+`null` 이면 그 영역만 숨기면 됩니다.
 
 > 분류 엔진이 12종을 그대로 내보내므로 **48종 전부 산출 가능**합니다.
 
@@ -1129,7 +1205,8 @@ AI 코스의 지도. **루트 지도와 응답 형태가 같습니다.** 차이�
 2  연동        GET  /connections/institutions
               POST /connections            × 4     → 계좌 자동 등록 (150~400ms 지연)
 
-3  소비 분석   POST /transactions/sync              → { imported:421, needsReview:19 }
+3  소비 분석   POST /transactions/sync              → { imported:424, classified:405, needsReview:19 }
+                                                   ★ Claude 가맹점 분류 (약 14초, 로딩 필요)
               GET  /transactions/pending-review    → 19건이 8개 질문으로
               PATCH /transactions/{id}/category    → alsoUpdatedCount 로 "N건 정리됨"
               POST /transactions/review/bulk       → 남은 것 일괄 확정
@@ -1137,6 +1214,7 @@ AI 코스의 지도. **루트 지도와 응답 형태가 같습니다.** 차이�
 
 4  페르소나    GET  /analysis/top-category
               POST /persona/evaluate               → "혈당스파이크 취침형"
+                                                   ★ Claude 축 선정 (약 7초) + 개인화 문구
 
 5  처방 선택   GET  /challenges/plans               → 여행지 5곳 카드 (기간·목표액 고정)
               ※ 절약 목표가 없어도 호출됩니다 — S10 이 S12 보다 앞입니다
@@ -1177,3 +1255,12 @@ AI 코스의 지도. **루트 지도와 응답 형태가 같습니다.** 차이�
 > ⑨의 첫 호출은 **15~20초** 걸립니다 (Claude API 왕복). 발표에서 기다리기 부담스러우면
 > ⑧ 직후에 미리 호출해 캐시를 채워 두세요 — 이후 조회는 20ms 안에 끝납니다.
 > 네트워크가 끊겨도 폴백 코스가 같은 형태로 내려오므로 화면은 비지 않습니다.
+
+> **Claude 를 타는 호출은 ③ · ④ · ⑨ 셋입니다** (약 14초 / 7초 / 20초).
+> 셋 다 실패해도 **200/201 로 규칙 기반 결과가 같은 형태로** 내려오므로 프론트는 분기가
+> 필요 없습니다. 어느 경로였는지는 각각 `classificationSource` · `ai.generatedBy` ·
+> `meta.generatedBy` 로 알 수 있으니 배지만 다르게 붙이세요.
+>
+> 오프라인 리허설이 필요하면 서버의 `AI_CLASSIFY_ENABLED` / `AI_PERSONA_ENABLED` /
+> `AI_COURSE_ENABLED` 를 `false` 로 두면 됩니다 — 각각 1.1초 / 0.05초 / 즉시로 끝나고
+> 화면 구성은 완전히 같습니다.

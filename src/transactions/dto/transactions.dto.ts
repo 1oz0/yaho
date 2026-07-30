@@ -61,6 +61,49 @@ export class SyncResultDto {
   @ApiProperty({ type: Number, description: '집계에서 제외된 거래 수 (수입·계좌간이체·취소)' })
   excluded!: number;
 
+  @ApiProperty({
+    type: Number,
+    description:
+      '`classified` 중 **Claude 가 판정한** 거래 수. 나머지는 사용자 규칙·키워드 사전·MCC·정기결제가 맡았습니다.',
+  })
+  aiClassified!: number;
+
+  @ApiProperty({
+    type: String,
+    enum: ['AI', 'RULE'],
+    description:
+      '이번 분류의 주 경로. `AI` 면 Claude 가 판정에 참여했고, `RULE` 이면 규칙 엔진만 돌았습니다.\n\n' +
+      '`RULE` 이어도 **정상 응답**입니다 — 분류 결과의 품질만 달라지고 화면은 똑같이 뜹니다.',
+  })
+  classificationSource!: string;
+
+  @ApiProperty({ type: Number, description: 'Claude 에게 판정을 요청한 가맹점 수 (거래 수가 아닙니다)' })
+  aiMerchantsAsked!: number;
+
+  @ApiProperty({ type: Number, description: 'Claude 가 확신해서 채택된 가맹점 수' })
+  aiMerchantsAccepted!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'Claude 가 "모르겠다"고 해서 규칙 엔진으로 넘긴 가맹점 수. ' +
+      '억지 추측 대신 물러선 것이라 **정상 동작**입니다.',
+  })
+  aiMerchantsDeferred!: number;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'AI 를 못 썼거나 일부 배치가 실패한 이유. `DISABLED`(키 없음/스위치 off) · `TIMEOUT` · ' +
+      '`RATE_LIMITED` · `OVERLOADED` · `AUTH_FAILED` · `MAX_TOKENS` · `BAD_JSON` · `API_ERROR`. ' +
+      '전부 성공했으면 null.',
+  })
+  aiFallbackReason!: string | null;
+
+  @ApiProperty({ type: Number, description: 'Claude 호출에 걸린 총 시간 (ms). 안 썼으면 0.' })
+  aiLatencyMs!: number;
+
   @ApiProperty({ type: String, description: '수집 시작일 (KST ISO)' })
   periodFrom!: string;
 

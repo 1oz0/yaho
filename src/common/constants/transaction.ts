@@ -16,7 +16,8 @@ export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
  */
 export const CLASSIFIED_BY = [
   'TX_TYPE_GUARD', // 0순위 — TRANSFER_IN / CANCEL 상계
-  'USER_RULE', // 2순위 — 사용자 개인 규칙
+  'USER_RULE', // 1순위 — 사용자 개인 규칙
+  'AI', // 2순위 — Claude 가맹점 판정
   'GLOBAL_RULE', // 3순위 — 전역 키워드 사전
   'MCC', // 4순위 — 업종코드 매핑
   'RECURRING', // 5순위 — 정기결제 탐지
@@ -25,6 +26,19 @@ export const CLASSIFIED_BY = [
   'MANUAL', // 사용자가 직접 지정
 ] as const;
 export type ClassifiedBy = (typeof CLASSIFIED_BY)[number];
+
+/** 분류 근거를 화면에 한국어로 보여줄 때 쓴다 */
+export const CLASSIFIED_BY_LABELS: Record<ClassifiedBy, string> = {
+  TX_TYPE_GUARD: '거래유형',
+  USER_RULE: '내가 정한 규칙',
+  AI: 'AI 분류',
+  GLOBAL_RULE: '가맹점 사전',
+  MCC: '업종코드',
+  RECURRING: '정기결제 탐지',
+  INTERNAL_TRANSFER: '계좌 간 이체',
+  NONE: '미분류',
+  MANUAL: '직접 지정',
+};
 
 /** EXCLUDED 로 빠진 이유 */
 export const EXCLUDE_REASONS = [
