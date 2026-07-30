@@ -529,3 +529,105 @@ DBeaver 로 열면 됩니다. 서버가 떠 있어도 읽기는 됩니다.
 `FinancialProviderPort` 인터페이스로만 남겨 두었습니다 (`src/financial/`).
 실데이터로 가려면 `MockFinancialProvider` 를 실제 구현체로 교체하면 되고,
 서비스 코드는 `mock_*` 테이블을 직접 조회하지 않으므로 나머지는 그대로 둬도 됩니다.
+
+---
+
+## 16. Railway 배포
+
+### 준비된 것
+
+| 파일 / 스크립트 | 역할 |
+|---|---|
+| `railway.json` | 빌드·시작 명령, 헬스체크 경로(`/api/v1/health`) |
+| `postinstall` | `prisma generate --schema prisma/schema.prisma` — **PostgreSQL 원본** 기준 |
+| `start:railway` | `db:deploy` → `seed:if-empty` → `start:prod` |
+| `scripts/seed-if-empty.ts` | **비어 있을 때만** 시드. 재시작마다 데이터가 날아가지 않는다 |
+
+`ts-node` · `typescript` · `prisma` · `npm-run-all` 을 `dependencies` 로 옮겼습니다 —
+배포 환경이 devDependencies 를 정리해도 시드가 돌아야 하기 때문입니다.
+
+### 배포 절차
+
+**1. GitHub 에 올리기**
+
+이 폴더는 이미 git 저장소이고 초기 커밋이 되어 있습니다 (`main` 브랜치).
+GitHub 에서 **빈 저장소**를 하나 만든 뒤:
+
+```powershell
+git remote add origin https://github.com/<사용자명>/<저장소명>.git
+git push -u origin main
+```
+
+**2. Railway 프로젝트 생성**
+
+1. [railway.com](https://railway.com) → **New Project** → **Deploy from GitHub repo**
+2. 방금 만든 저장소 선택
+3. 첫 배포는 **실패합니다** — 아직 DB 와 환경변수가 없기 때문입니다. 정상입니다.
+
+**3. PostgreSQL 붙이기**
+
+프로젝트 화면에서 **+ Create** → **Database** → **Add PostgreSQL**.
+`DATABASE_URL` 이 자동으로 주입되므로 직접 넣지 마세요.
+
+> ⚠️ 서비스에서 `Variables` → `DATABASE_URL` 이 `${{Postgres.DATABASE_URL}}` 로
+> 참조되고 있는지 확인하세요. 안 되어 있으면 직접 그 값으로 추가합니다.
+
+**4. 환경변수 설정**
+
+서비스 → **Variables** 에 아래를 넣습니다.
+
+| 변수 | 값 | 비고 |
+|---|---|---|
+| `JWT_SECRET` | 32자 이상 임의 문자열 | **필수.** 기본값이 없어 없으면 부팅 실패 |
+| `ANTHROPIC_API_KEY` | `sk-ant-...` | 로컬 `.env` 의 값 |
+| `NODE_ENV` | `production` | |
+| `DEMO_MODE` | `true` | 발표에 `/demo/*` 가 필요합니다 |
+| `SWAGGER_ENABLED` | `true` | 프론트가 문서를 봐야 합니다 |
+
+`PORT` 는 Railway 가 주입하므로 넣지 마세요. 나머지는 기본값으로 동작합니다.
+
+**5. 공개 URL 발급**
+
+서비스 → **Settings** → **Networking** → **Generate Domain**.
+`https://<이름>.up.railway.app` 형태의 URL 이 나옵니다.
+
+```
+API      https://<도메인>/api/v1
+Swagger  https://<도메인>/docs
+Health   https://<도메인>/api/v1/health
+```
+
+### 배포 후 확인
+
+```powershell
+curl https://<도메인>/api/v1/health
+```
+
+`databaseProvider` 가 **`postgresql`** 로 나와야 합니다. `sqlite` 면 `DATABASE_URL` 이
+안 붙은 것입니다.
+
+로그에서 이 두 줄을 확인하세요:
+```
+[seed-if-empty] 비어 있습니다 (여행지 0곳 / 사용자 0명). 시드를 실행합니다.
+시드 완료
+```
+
+두 번째 배포부터는 `이미 채워져 있습니다 … 건너뜁니다.` 가 나오는 것이 정상입니다.
+
+### 참조 데이터를 다시 만들고 싶을 때
+
+Railway 서비스 → **Settings** → **Deploy** 아래의 터미널, 또는 CLI 로:
+
+```powershell
+railway run npm run db:seed
+```
+
+⚠️ 이건 **모든 테이블을 비우고 다시 채웁니다.** 사용자 진행 상태도 지워집니다.
+
+### 알려진 위험
+
+- **PostgreSQL 경로는 이번 배포가 첫 실전입니다.** 지금까지 스키마 유효성만 확인했고
+  런타임은 SQLite 로만 검증했습니다. `db push` 단계에서 실패하면 로그를 보고 대응해야 합니다.
+- **무료 크레딧은 $5/월**입니다. 해커톤 기간에는 충분하지만, 계속 띄워둘 거면
+  사용량을 확인하세요.
+- **AI 코스 첫 호출은 15~25초** 걸립니다. 발표 전에 미리 한 번 호출해 캐시를 채워 두세요.
