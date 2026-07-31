@@ -6,6 +6,7 @@
  *  - 이력이 6개월 미만이면 **존재하는 월 수 n** 으로만 평균을 낸다.
  *  - `EXCLUDED`(수입·계좌간이체·취소 상계분)는 모든 집계에서 뺀다.
  *  - 진행 중인 부분 월은 **평균 계산에서 제외**한다. (챌린지 진척 계산에서는 쓴다)
+ *    단, 그 달의 거래 이력이 이미 월말까지 닿아 있으면 완결로 본다 — 아래 참조.
  *
  * UNCLASSIFIED 는 집계에 **포함**한다. 실제로 나간 돈이기 때문이다.
  * 다만 페르소나 카테고리 축과 절약 목표 대상에서는 빠진다(각각 PERSONA_CATEGORIES /
@@ -15,6 +16,9 @@
 import { TIME_BANDS, timeBandOfHour, type TimeBand } from '../common/constants/persona';
 import { TX_CATEGORIES, type TxCategory } from '../common/constants/tx-category';
 import {
+  addDays,
+  currentPartialMonth,
+  kstDayOfMonth,
   kstHour,
   kstMonthKey,
   lastNCompleteMonths,
@@ -87,9 +91,39 @@ export interface AnalysisSummary {
 
 const DEFAULT_MONTHS = 6;
 
+/**
+ * 진행 중인 달을 완결 월로 인정할 최소 데이터 커버리지.
+ *
+ * "부분 월 제외" 규칙이 막으려는 것은 **3일치를 한 달로 나눠 평균이 무너지는 일**이지,
+ * 달력상 1일이 안 지났다는 사실 자체가 아니다. 그래서 달력이 아니라 **데이터**로 판정한다.
+ *   · 7월 5일에 연동 → 7월 데이터가 4일치(13%) → 제외 (원래 의도 그대로)
+ *   · 7월 31일에 연동 → 7월 데이터가 30일치(97%) → 포함
+ *
+ * 후자를 제외하면 멀쩡한 한 달을 통째로 버리면서 그만큼 더 오래된 달을 끌어와,
+ * "최근 6개월" 이라면서 반년 전 소비로 진단하게 된다.
+ */
+const PARTIAL_MONTH_MIN_COVERAGE = 0.8;
+
 /** 집계에서 완전히 빠지는 카테고리 */
 function isAggregated(category: string): boolean {
   return category !== 'EXCLUDED';
+}
+
+/** 그 달의 며칠까지 거래가 있는지 ÷ 그 달의 일수 */
+function monthCoverage(
+  transactions: readonly SummaryTransaction[],
+  window: MonthWindow,
+): number {
+  let lastDay = 0;
+  for (const tx of transactions) {
+    if (kstMonthKey(tx.approvedAt) !== window.key) continue;
+    const day = kstDayOfMonth(tx.approvedAt);
+    if (day > lastDay) lastDay = day;
+  }
+  if (lastDay === 0) return 0;
+  // window.end 는 다음 달 1일 00:00 이므로 하루 빼면 이 달의 마지막 날이다
+  const daysInMonth = kstDayOfMonth(addDays(window.end, -1));
+  return lastDay / daysInMonth;
 }
 
 /**
@@ -103,8 +137,14 @@ export function buildSummary(
   now: Date,
   months = DEFAULT_MONTHS,
 ): AnalysisSummary {
-  const windows = lastNCompleteMonths(now, months);
   const spendable = transactions.filter((t) => isAggregated(t.category));
+
+  // 진행 중인 달이 사실상 다 찼으면 창에 넣고, 창 길이를 지키려 가장 오래된 달을 뺀다.
+  const partial = currentPartialMonth(now);
+  const windows =
+    monthCoverage(spendable, partial) >= PARTIAL_MONTH_MIN_COVERAGE
+      ? [...lastNCompleteMonths(now, months - 1), partial]
+      : lastNCompleteMonths(now, months);
 
   // --- monthsCovered ---------------------------------------------------------
   // 데이터가 시작된 월부터 마지막 완결 월까지를 센다.

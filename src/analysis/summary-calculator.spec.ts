@@ -62,6 +62,23 @@ describe('buildSummary — 기준 기간과 monthsCovered (§6-1)', () => {
     expect(s.totalAmount).toBe(100_000); // 7월 90만원은 빠진다
   });
 
+  it('진행 중인 달이라도 이력이 월말까지 닿아 있으면 완결로 본다', () => {
+    // 7월 30일까지 거래가 있으면 커버리지 30/31 = 97% → 7월을 창에 넣고 가장 오래된 1월을 뺀다.
+    // 이게 없으면 멀쩡한 한 달을 버리고 반년 전(1월) 소비를 대신 끌어와 진단한다.
+    const txs = [
+      ...[1, 2, 3, 4, 5, 6].map((m) => at(m, 100_000)),
+      at(7, 100_000, 'DELIVERY_FOOD', 30),
+    ];
+    const s = buildSummary(txs, NOW);
+    expect(s.monthsCovered).toBe(6);
+    expect(toKstIso(s.periodFrom!)).toBe('2026-02-01T00:00:00.000+09:00');
+    expect(toKstIso(s.periodTo!)).toBe('2026-08-01T00:00:00.000+09:00');
+    expect(s.monthlyTrend.map((m) => m.month)).toEqual([
+      '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07',
+    ]);
+    expect(s.totalAmount).toBe(600_000); // 1월 10만원은 빠진다
+  });
+
   it('6개월보다 오래된 거래는 제외한다', () => {
     const txs = [at(6, 100_000), tx({ approvedAt: kstDate(2025, 11, 10, 12, 0), amount: 500_000 })];
     const s = buildSummary(txs, NOW);
